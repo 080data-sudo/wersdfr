@@ -14,60 +14,59 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); }
   catch { return respond(400, { error: "Неверный запрос" }, headers); }
 
-  const { url = "" } = body;
+  const { url = "", quality = "best" } = body;
   if (!url.trim()) return respond(400, { error: "URL не указан" }, headers);
 
-  const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/);
-  if (!match) return respond(400, { error: "Неверная ссылка YouTube" }, headers);
-
-  const videoId = match[1];
+  const qualityMap = {
+    "best[ext=mp4]/best": "max",
+    "bestvideo[height<=1080]": "1080",
+    "bestvideo[height<=720]": "720",
+    "bestvideo[height<=480]": "480",
+    "bestaudio": "max",
+  };
+  const videoQuality = qualityMap[quality] || "720";
+  const isAudio = quality.includes("audio");
 
   try {
-    const { Innertube } = await import("youtubei.js");
+    const cobaltRes = await fetch("https://api.cobalt.tools/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0",
+      },
+      body: JSON.stringify({
+        url,
+        videoQuality,
+        downloadMode: isAudio ? "audio" : "auto",
+        audioFormat: isAudio ? "mp3" : "best",
+        filenameStyle: "basic",
+      }),
+    });
 
-    const yt = await Innertube.create({ generate_session_locally: true });
+    const data = await cobaltRes.json();
 
-    // Android-клиент — меньше ограничений на сервере
-    const info = await yt.getBasicInfo(videoId, "ANDROID");
-
-    const status = info.playability_status?.status;
-    if (status && status !== "OK") {
-      const reason = info.playability_status?.reason || status;
-      return respond(500, { error: `YouTube: ${reason}` }, headers);
+    if (data.status === "error") {
+      return respond(500, { error: data.error?.code || "Ошибка сервиса" }, headers);
     }
 
-    const formats = [
-      ...(info.streaming_data?.formats || []),
-      ...(info.streaming_data?.adaptive_formats || []),
-    ];
+    if (data.status === "redirect" || data.status === "tunnel") {
+      // Берём метаданные через YouTube oEmbed (работает всегда)
+      let title = "Видео", thumbnail = "";
+      try {
+        const oe = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+        const meta = await oe.json();
+        title = meta.title || "Видео";
+        thumbnail = meta.thumbnail_url || "";
+      } catch {}
 
-    if (!formats.length) {
-      return respond(500, { error: "Нет доступных форматов (возможно, блокировка по IP)" }, headers);
+      return respond(200, { title, url: data.url, thumbnail, duration: 0, quality: videoQuality }, headers);
     }
 
-    // Прогрессивный формат (видео + аудио)
-    const progressive = formats
-      .filter(f => f.has_video && f.has_audio)
-      .sort((a, b) => (b.width || 0) - (a.width || 0));
-
-    const format = progressive[0] || formats[0];
-    const downloadUrl = format.decipher(yt.session.player);
-
-    if (!downloadUrl) {
-      return respond(500, { error: "Не удалось расшифровать URL (IP заблокирован YouTube)" }, headers);
-    }
-
-    return respond(200, {
-      title: info.basic_info?.title || "Видео",
-      url: downloadUrl,
-      thumbnail: info.basic_info?.thumbnail?.[0]?.url || "",
-      duration: info.basic_info?.duration || 0,
-      quality: format.quality_label || "",
-    }, headers);
+    return respond(500, { error: `Неожиданный ответ: ${data.status}` }, headers);
 
   } catch (err) {
-    // Возвращаем реальную ошибку для диагностики
-    return respond(500, { error: err.message || "Неизвестная ошибка" }, headers);
+    return respond(500, { error: err.message }, headers);
   }
 };
 
