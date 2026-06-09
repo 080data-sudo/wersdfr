@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@distube/ytdl-core": "^4.14.4"
+    "youtubei.js": "^10.4.0"
   }
 }
