@@ -23,21 +23,21 @@ exports.handler = async (event) => {
   const videoId = match[1];
 
   try {
-    const { Innertube } = require("youtubei.js");
+    const { Innertube } = await import("youtubei.js");
 
     const yt = await Innertube.create({ generate_session_locally: true });
     const info = await yt.getBasicInfo(videoId, "TV_EMBEDDED");
 
-    const formats = info.streaming_data?.formats || [];
-    const adaptiveFormats = info.streaming_data?.adaptive_formats || [];
-    const allFormats = [...formats, ...adaptiveFormats];
+    const formats = [
+      ...(info.streaming_data?.formats || []),
+      ...(info.streaming_data?.adaptive_formats || []),
+    ];
 
-    // Прогрессивный формат (видео + аудио вместе)
-    const progressive = allFormats
+    const progressive = formats
       .filter(f => f.has_video && f.has_audio)
       .sort((a, b) => (b.width || 0) - (a.width || 0));
 
-    const format = progressive[0] || allFormats[0];
+    const format = progressive[0] || formats[0];
     if (!format) return respond(500, { error: "Форматы не найдены" }, headers);
 
     const downloadUrl = format.decipher(yt.session.player);
@@ -52,8 +52,8 @@ exports.handler = async (event) => {
 
   } catch (err) {
     let msg = err.message || "Ошибка";
-    if (msg.includes("private"))    msg = "Приватное видео";
-    if (msg.includes("available"))  msg = "Видео недоступно";
+    if (msg.includes("private"))   msg = "Приватное видео";
+    if (msg.includes("available")) msg = "Видео недоступно";
     return respond(500, { error: msg }, headers);
   }
 };
