@@ -1,8 +1,5 @@
 {
   "name": "yt-downloader",
   "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "youtubei.js": "^10.4.0"
-  }
+  "private": true
 }
