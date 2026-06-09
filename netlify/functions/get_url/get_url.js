@@ -1,100 +1,63 @@
-const ytdl = require("@distube/ytdl-core");
-
-const HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-};
-
-// Качество → itag или фильтр
-const QUALITY_MAP = {
-  "best":    null,                    // лучшее видео+аудио
-  "1080p":   { quality: "highestvideo", filter: f => f.height <= 1080 && f.hasVideo },
-  "720p":    { quality: "highestvideo", filter: f => f.height <= 720  && f.hasVideo },
-  "480p":    { quality: "highestvideo", filter: f => f.height <= 480  && f.hasVideo },
-  "audio":   { quality: "highestaudio", filter: f => !f.hasVideo && f.hasAudio },
-};
-
 exports.handler = async (event) => {
-  // Preflight CORS
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+  };
+
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers: HEADERS, body: "" };
+    return { statusCode: 200, headers, body: "" };
   }
 
   let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return respond(400, { error: "Неверный формат запроса" });
-  }
+  try { body = JSON.parse(event.body || "{}"); }
+  catch { return respond(400, { error: "Неверный запрос" }, headers); }
 
-  const { url = "", quality = "best" } = body;
+  const { url = "" } = body;
+  if (!url.trim()) return respond(400, { error: "URL не указан" }, headers);
 
-  if (!url.trim()) {
-    return respond(400, { error: "URL не указан" });
-  }
+  const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/);
+  if (!match) return respond(400, { error: "Неверная ссылка YouTube" }, headers);
 
-  if (!ytdl.validateURL(url)) {
-    return respond(400, { error: "Это не ссылка YouTube" });
-  }
+  const videoId = match[1];
 
   try {
-    const info = await ytdl.getInfo(url);
-    const videoDetails = info.videoDetails;
+    const { Innertube } = require("youtubei.js");
 
-    // Выбираем формат
-    let format;
-    const q = quality.replace(/[^a-z0-9]/g, "");
+    const yt = await Innertube.create({ generate_session_locally: true });
+    const info = await yt.getBasicInfo(videoId, "TV_EMBEDDED");
 
-    if (q === "audio") {
-      format = ytdl.chooseFormat(info.formats, {
-        quality: "highestaudio",
-        filter: "audioonly",
-      });
-    } else if (q === "1080p" || q === "720p" || q === "480p") {
-      const maxH = parseInt(q);
-      // Ищем прогрессивный (видео+аудио) формат с нужным разрешением
-      const candidates = info.formats.filter(
-        f => f.hasVideo && f.hasAudio && f.height && f.height <= maxH
-      ).sort((a, b) => b.height - a.height);
+    const formats = info.streaming_data?.formats || [];
+    const adaptiveFormats = info.streaming_data?.adaptive_formats || [];
+    const allFormats = [...formats, ...adaptiveFormats];
 
-      format = candidates[0] || ytdl.chooseFormat(info.formats, { quality: "highestvideo" });
-    } else {
-      // Лучшее прогрессивное (видео+аудио в одном файле)
-      const progressive = info.formats.filter(f => f.hasVideo && f.hasAudio);
-      progressive.sort((a, b) => (b.height || 0) - (a.height || 0));
-      format = progressive[0] || ytdl.chooseFormat(info.formats, { quality: "highest" });
-    }
+    // Прогрессивный формат (видео + аудио вместе)
+    const progressive = allFormats
+      .filter(f => f.has_video && f.has_audio)
+      .sort((a, b) => (b.width || 0) - (a.width || 0));
 
-    if (!format || !format.url) {
-      return respond(500, { error: "Не удалось найти подходящий формат" });
-    }
+    const format = progressive[0] || allFormats[0];
+    if (!format) return respond(500, { error: "Форматы не найдены" }, headers);
+
+    const downloadUrl = format.decipher(yt.session.player);
 
     return respond(200, {
-      title:     videoDetails.title,
-      url:       format.url,
-      thumbnail: videoDetails.thumbnails?.at(-1)?.url || "",
-      duration:  parseInt(videoDetails.lengthSeconds) || 0,
-      quality:   format.qualityLabel || format.audioQuality || "",
-      ext:       format.container || "mp4",
-    });
+      title: info.basic_info?.title || "Видео",
+      url: downloadUrl,
+      thumbnail: info.basic_info?.thumbnail?.[0]?.url || "",
+      duration: info.basic_info?.duration || 0,
+      quality: format.quality_label || "",
+    }, headers);
 
   } catch (err) {
-    let msg = err.message || "Неизвестная ошибка";
-    if (msg.includes("Private"))              msg = "Это приватное видео";
-    else if (msg.includes("not available"))   msg = "Видео недоступно или удалено";
-    else if (msg.includes("age"))             msg = "Видео с возрастным ограничением";
-    else if (msg.includes("copyright"))       msg = "Видео заблокировано по авторским правам";
-
-    return respond(500, { error: msg });
+    let msg = err.message || "Ошибка";
+    if (msg.includes("private"))    msg = "Приватное видео";
+    if (msg.includes("available"))  msg = "Видео недоступно";
+    return respond(500, { error: msg }, headers);
   }
 };
 
-function respond(statusCode, data) {
-  return {
-    statusCode,
-    headers: HEADERS,
-    body: JSON.stringify(data),
-  };
+function respond(code, data, headers) {
+  return { statusCode: code, headers, body: JSON.stringify(data) };
 }
