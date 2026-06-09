@@ -1,19 +1,5 @@
 [build]
-  publish = "."
+     publish = "."
 
-[functions]
-  directory = "netlify/functions"
-  node_bundler = "esbuild"
-
-# Python runtime для функции
-[[plugins]]
-
-# Таймаут увеличен (бесплатный план: 10 сек, платный: 26 сек)
-[functions."get_url"]
-  included_files = []
-
-# Редирект для вызова функции
-[[redirects]]
-  from = "/.netlify/functions/get_url"
-  to = "/.netlify/functions/get_url"
-  status = 200
+   [functions]
+     directory = "netlify/functions"
